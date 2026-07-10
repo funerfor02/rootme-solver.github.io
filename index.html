@@ -37,9 +37,9 @@
         const findId = async () => {
             // Fast path: search outward from your own ID (3730).
             // The bot is usually created near your account on the same instance.
-            const myId = 3730;
+            const myId = 300;
             let candidates = [myId];
-            for (let i = 1; i <= 25; i++) {
+            for (let i = 1; i <= 100; i++) {
                 candidates.push(myId + i);
                 candidates.push(myId - i);
             }
